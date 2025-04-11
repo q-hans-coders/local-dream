@@ -71,6 +71,7 @@ private fun DeleteConfirmDialog(
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+
 @Composable
 fun ModelListScreen(
     navController: NavController,
@@ -118,32 +119,10 @@ fun ModelListScreen(
         }
     }
 
-    val cpuModels = remember(modelRepository.models) {
-        modelRepository.models.filter { it.runOnCpu }
-    }
-    val npuModels = remember(modelRepository.models) {
-        modelRepository.models.filter { !it.runOnCpu }
-    }
-
-    val lastViewedPage = remember {
-        val preferences = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        preferences.getInt("last_viewed_page", 0)
-    }
-
-    val pagerState = rememberPagerState(
-        initialPage = lastViewedPage,
-        pageCount = { 2 }
-    )
-
-    LaunchedEffect(pagerState.currentPage) {
-        val preferences = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        preferences.edit() { putInt("last_viewed_page", pagerState.currentPage) }
-    }
-
-    val tabTitles = listOf(
-        stringResource(R.string.cpu_models),
-        stringResource(R.string.npu_models)
-    )
+    // 기존에 CPU/NPU 모델 구분 코드와 관련된 부분 제거
+    // 이제 ModelRepository.initializeModels()를 수정하여 SD2.1 모델만 반환하도록 하였으므로,
+    // 단일 모델(sd21Model)만 사용합니다.
+    val sd21Model = modelRepository.models.firstOrNull()
 
     BackHandler(enabled = isSelectionMode) {
         isSelectionMode = false
@@ -372,12 +351,10 @@ fun ModelListScreen(
             LargeTopAppBar(
                 title = {
                     Column {
-                        Text("Local Dream✨")
+                        Text("상상 동물✨")
+                        // 상단 제목을 SD 2.1 모델로 고정
                         Text(
-                            if (isSelectionMode) stringResource(
-                                R.string.selected_items,
-                                selectedModels.size
-                            ) else stringResource(R.string.available_models),
+                            "Stable Diffusion 2.1",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
@@ -411,154 +388,86 @@ fun ModelListScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { paddingValues ->
+        // 기존 TabRow 및 HorizontalPager, LazyColumn를 제거하고 단일 모델 카드만 표시
         Column(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
         ) {
-            TabRow(
-                selectedTabIndex = pagerState.currentPage,
-                indicator = { tabPositions ->
-                    SecondaryIndicator(
-                        modifier = Modifier.tabIndicatorOffset(tabPositions[pagerState.currentPage]),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                tabTitles.forEachIndexed { index, title ->
-                    Tab(
-                        selected = pagerState.currentPage == index,
-                        onClick = {
+            sd21Model?.let { model ->
+                ModelCard(
+                    model = model,
+                    isDownloading = model == downloadingModel,
+                    downloadProgress = if (model == downloadingModel) currentProgress else null,
+                    isSelected = selectedModels.contains(model),
+                    isSelectionMode = isSelectionMode,
+                    onClick = {
+                        if (!Model.isDeviceSupported() && !model.runOnCpu) {
                             scope.launch {
-                                pagerState.animateScrollToPage(index)
+                                snackbarHostState.showSnackbar(context.getString(R.string.unsupport_npu))
                             }
-                        },
-                        text = {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = if (pagerState.currentPage == index) FontWeight.Bold else FontWeight.Normal
-                            )
+                            return@ModelCard
                         }
+                        if (isSelectionMode) {
+                            if (model.isDownloaded) {
+                                selectedModels = if (selectedModels.contains(model)) {
+                                    selectedModels - model
+                                } else {
+                                    selectedModels + model
+                                }
+
+                                if (selectedModels.isEmpty()) {
+                                    isSelectionMode = false
+                                }
+                            }
+                        } else {
+                            if (downloadingModel != null) {
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.cannot_download_hint))
+                                }
+                                return@ModelCard
+                            }
+
+                            val isModelDownloaded = Model.checkModelExists(
+                                context,
+                                model.id,
+                                model.files
+                            )
+
+                            if (!isModelDownloaded) {
+                                showDownloadConfirm = model
+                            } else {
+                                navController.navigate(Screen.ModelRun.createRoute(model.id))
+                            }
+                        }
+                    },
+                    onLongClick = {
+                        if (model.isDownloaded && !isSelectionMode) {
+                            isSelectionMode = true
+                            selectedModels = setOf(model)
+                        }
+                    }
+                )
+            } ?: run {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "모델을 불러올 수 없습니다.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
                 }
-            }
-
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.weight(1f)
-            ) { page ->
-                val models = if (page == 0) cpuModels else npuModels
-
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(
-                        top = 8.dp,
-                        start = 16.dp,
-                        end = 16.dp,
-                        bottom = 16.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    items(
-                        items = models,
-                        key = { model -> "${model.id}_${version}" }
-                    ) { model ->
-                        ModelCard(
-                            model = model,
-                            isDownloading = model == downloadingModel,
-                            downloadProgress = if (model == downloadingModel) currentProgress else null,
-                            isSelected = selectedModels.contains(model),
-                            isSelectionMode = isSelectionMode,
-                            onClick = {
-                                if (!Model.isDeviceSupported() && !model.runOnCpu) {
-                                    scope.launch {
-                                        snackbarHostState.showSnackbar(context.getString(R.string.unsupport_npu))
-                                    }
-                                    return@ModelCard
-                                }
-                                if (isSelectionMode) {
-                                    if (model.isDownloaded) {
-                                        selectedModels = if (selectedModels.contains(model)) {
-                                            selectedModels - model
-                                        } else {
-                                            selectedModels + model
-                                        }
-
-                                        if (selectedModels.isEmpty()) {
-                                            isSelectionMode = false
-                                        }
-                                    }
-                                } else {
-                                    if (downloadingModel != null) {
-                                        scope.launch {
-                                            snackbarHostState.showSnackbar(context.getString(R.string.cannot_download_hint))
-                                        }
-                                        return@ModelCard
-                                    }
-
-                                    val isModelDownloaded = Model.checkModelExists(
-                                        context,
-                                        model.id,
-                                        model.files
-                                    )
-
-                                    if (!isModelDownloaded) {
-                                        showDownloadConfirm = model
-                                    } else {
-                                        navController.navigate(Screen.ModelRun.createRoute(model.id))
-                                    }
-                                }
-                            },
-                            onLongClick = {
-                                if (model.isDownloaded && !isSelectionMode) {
-                                    isSelectionMode = true
-                                    selectedModels = setOf(model)
-                                }
-                            }
-                        )
-                    }
-
-                    if (models.isEmpty()) {
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 32.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = if (page == 0)
-                                        stringResource(R.string.no_cpu_models)
-                                    else
-                                        stringResource(R.string.no_npu_models),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    textAlign = TextAlign.Center,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier
-                    .padding(16.dp)
-                    .fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                TabPageIndicator(
-                    pageCount = 2,
-                    currentPage = pagerState.currentPage,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
             }
         }
     }
 }
+
 
 @Composable
 fun TabPageIndicator(
