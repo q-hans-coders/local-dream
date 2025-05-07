@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # QNN SDK PATH, MUST BE 2.29.0.241129
-set(QNN_SDK_ROOT /data/qairt/2.29.0.241129)
+set(QNN_SDK_ROOT /home/hyunsoo/Downloads/qairt/2.29.0.241129)
 
 file(COPY ${QNN_SDK_ROOT}/examples/QNN/SampleApp/
     DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/SampleApp)
